@@ -145,7 +145,7 @@ func TestUsage(t *testing.T) {
 	ResetForTesting(func() { called = true })
 	f := CommandLine
 	f.SetOutput(nullWriter{})
-	if f.Parse(true, []string{"-x"}) == nil {
+	if f.Parse([]string{"-x"}) == nil {
 		t.Error("parse did not fail for unknown flag")
 	}
 	if !called {
@@ -403,7 +403,10 @@ func testParse(newFlagSet func() *FlagSet, t *testing.T) {
 					t.Fatalf("unhandled type %T", val)
 				}
 			}
-			err := f.Parse(g.intersperse, g.args)
+			if !g.intersperse {
+				f.NoIntersperse()
+			}
+			err := f.Parse(g.args)
 			if g.error != "" {
 				expectedError := g.error
 				if err == nil {
@@ -465,7 +468,7 @@ func TestUserDefined(t *testing.T) {
 	flags.Init("test", ContinueOnError)
 	var v flagVar
 	flags.Var(&v, "v", "usage")
-	if err := flags.Parse(true, []string{"-v", "1", "-v", "2", "-v3"}); err != nil {
+	if err := flags.Parse([]string{"-v", "1", "-v", "2", "-v3"}); err != nil {
 		t.Error(err)
 	}
 	if len(v) != 3 {
@@ -513,7 +516,7 @@ func TestUserDefinedBool(t *testing.T) {
 	var b boolFlagVar
 	var err error
 	flags.Var(&b, "b", "usage")
-	if err = flags.Parse(true, []string{"-b", "-b", "-b", "-b=true", "-b=false", "-b", "barg", "-b"}); err != nil {
+	if err = flags.Parse([]string{"-b", "-b", "-b", "-b=true", "-b=false", "-b", "barg", "-b"}); err != nil {
 		if b.count < 4 {
 			t.Error(err)
 		}
@@ -533,7 +536,7 @@ func TestSetOutput(t *testing.T) {
 	var buf bytes.Buffer
 	flags.SetOutput(&buf)
 	flags.Init("test", ContinueOnError)
-	flags.Parse(true, []string{"-unknown"})
+	flags.Parse([]string{"-unknown"})
 	if out := buf.String(); !strings.Contains(out, "-unknown") {
 		t.Logf("expected output mentioning unknown; got %q", out)
 	}
@@ -547,13 +550,14 @@ func TestChangingArgs(t *testing.T) {
 	defer func() { os.Args = oldArgs }()
 	os.Args = []string{"cmd", "--before", "subcmd", "--after", "args"}
 	before := Bool("before", false, "")
-	if err := CommandLine.Parse(false, os.Args[1:]); err != nil {
+	CommandLine.NoIntersperse()
+	if err := CommandLine.Parse(os.Args[1:]); err != nil {
 		t.Fatal(err)
 	}
 	cmd := Arg(0)
 	os.Args = Args()
 	after := Bool("after", false, "")
-	Parse(false)
+	Parse()
 	args := Args()
 
 	if !*before || cmd != "subcmd" || !*after || len(args) != 1 || args[0] != "args" {
@@ -569,7 +573,7 @@ func TestHelp(t *testing.T) {
 	var flag bool
 	fs.BoolVar(&flag, "flag", false, "regular flag")
 	// Regular flag invocation should work
-	err := fs.Parse(false, []string{"--flag=true"})
+	err := fs.Parse([]string{"--flag=true"})
 	if err != nil {
 		t.Fatal("expected no error; got ", err)
 	}
@@ -581,7 +585,7 @@ func TestHelp(t *testing.T) {
 		helpCalled = false // reset for next test
 	}
 	// Help flag should work as expected.
-	err = fs.Parse(false, []string{"--help"})
+	err = fs.Parse([]string{"--help"})
 	if err == nil {
 		t.Fatal("error expected")
 	}
@@ -595,7 +599,7 @@ func TestHelp(t *testing.T) {
 	var help bool
 	fs.BoolVar(&help, "help", false, "help flag")
 	helpCalled = false
-	err = fs.Parse(false, []string{"--help"})
+	err = fs.Parse([]string{"--help"})
 	if err != nil {
 		t.Fatal("expected no error for defined --help; got ", err)
 	}
@@ -693,7 +697,7 @@ func TestUsageOutput(t *testing.T) {
 	CommandLine.SetOutput(&buf)
 	defer func(old []string) { os.Args = old }(os.Args)
 	os.Args = []string{"app", "-i=1", "-unknown"}
-	Parse(false)
+	Parse()
 	const want = "flag provided but not defined: -i\nUsage of app:\n"
 	if got := buf.String(); got != want {
 		t.Errorf("output = %q; want %q", got, want)
@@ -746,7 +750,7 @@ func TestParseError(t *testing.T) {
 		_ = fs.Duration("duration", 0, "")
 		// Strings cannot give errors.
 		args := []string{"--" + typ + "=x"}
-		err := fs.Parse(false, args) // x is not a valid setting for any flag.
+		err := fs.Parse(args) // x is not a valid setting for any flag.
 		if err == nil {
 			t.Errorf("Parse(%q)=%v; expected parse error", args, err)
 			continue
@@ -774,7 +778,7 @@ func TestRangeError(t *testing.T) {
 		_ = fs.Uint64("uint64", 0, "")
 		_ = fs.Float64("float64", 0, "")
 		// Strings cannot give errors, and bools and durations do not return strconv.NumError.
-		err := fs.Parse(false, []string{arg})
+		err := fs.Parse([]string{arg})
 		if err == nil {
 			t.Errorf("Parse(%q)=%v; expected range error", arg, err)
 			continue

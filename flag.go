@@ -3,15 +3,18 @@
 // license that can be found in the LICENSE file.
 
 /*
-	Package flag implements command-line flag parsing in the GNU style.
-	It is implements almost exactly the same API as the standard flag package,
-	the only difference being the extra argument to Parse.
+	Package flag implements command-line flag parsing in the GNU style,
+	with multiple-letter flag names requiring a double-hyphen prefix.
+
+	The API is fully compatible with the standard library's flag package,
+	with the addition of the NoIntersperse method and function to control
+	the handling of flags interspersed with arguments,
 
 	Usage
 
 	Define flags using flag.String(), Bool(), Int(), etc.
 
-	This declares an integer flag, -flagname, stored in the pointer ip, with type *int.
+	This declares an integer flag, --flagname, stored in the pointer ip, with type *int.
 		import "flag"
 		var ip = flag.Int("flagname", 1234, "help message for flagname")
 	If you like, you can bind the flag to a variable using the Var() functions.
@@ -21,8 +24,14 @@
 		}
 	Or you can create custom flags that satisfy the Value interface (with
 	pointer receivers) and couple them to flag parsing by
-		flag.Var(&flagVal, "name", "help message for flagname")
+		flag.Var(&flagVal, "n", "help message for flagname")
 	For such flags, the default value is just the initial value of the variable.
+
+	You can add an alias (another name) for a flag by adding the flag
+	with the same address. Given the above flagVal definition, you can
+	create another name for the same flag.
+		flag.Var(&flagVal, "name", "")
+ 	The usage message for the shortest name is the one printed in the help message.
 
 	After all flags are defined, call
 		flag.Parse()
@@ -42,9 +51,11 @@
 	The following forms are permitted:
 
 		-f		// single letter flag
+		-f=false	// explicit boolean argument
 		-fg		// two single letter flags together
 		--flag	// multiple letter flag
 		--flag x  // non-boolean flags only
+		--flag=x
 		-f x		// non-boolean flags only
 		-fx		// if f is a non-boolean flag, x is its argument.
 
@@ -329,17 +340,17 @@ type FlagSet struct {
 	// to ExitOnError, which exits the program after calling Usage.
 	Usage func()
 
-	name             string
-	parsed           bool
-	actual           map[string]*Flag
-	formal           map[string]*Flag
-	args             []string // arguments after flags
-	procArgs         []string // arguments being processed (gnu only)
-	procFlag         string   // flag being processed (gnu only)
-	allowIntersperse bool     // (gnu only)
-	exitOnError      bool     // does the program exit if there's an error?
-	errorHandling    ErrorHandling
-	output           io.Writer // nil means stderr; use out() accessor
+	name          string
+	parsed        bool
+	actual        map[string]*Flag
+	formal        map[string]*Flag
+	args          []string // arguments after flags
+	procArgs      []string // arguments being processed (gnu only)
+	procFlag      string   // flag being processed (gnu only)
+	noIntersperse bool     // whether to forbid flags interspersed with arguments
+	exitOnError   bool     // does the program exit if there's an error?
+	errorHandling ErrorHandling
+	output        io.Writer // nil means stderr; use out() accessor
 }
 
 // A Flag represents the state of a flag.
@@ -973,7 +984,7 @@ func (f *FlagSet) parseOne() (flagName string, long, finished bool, err error) {
 
 	// one non-flag argument
 	if a == "-" || a == "" || a[0] != '-' {
-		if f.allowIntersperse {
+		if !f.noIntersperse {
 			f.args = append(f.args, a)
 			f.procArgs = f.procArgs[1:]
 			return
@@ -1080,18 +1091,31 @@ func (f *FlagSet) parseFlagArg(name string, long bool) (finished bool, err error
 	return
 }
 
+// NoIntersperse configures f so that when arguments are parsed, the
+// first non-flag argument will stop flag parsing.
+//
+// By default, flags will be recognized anywhere in the argument list.
+func (f *FlagSet) NoIntersperse() {
+	f.noIntersperse = true
+}
+
+// NoIntersperse configures the global flagset so that when arguments are parsed, the
+// first non-flag argument will stop flag parsing.
+//
+// By default, flags will be recognized anywhere in the argument list.
+func NoIntersperse() {
+	CommandLine.NoIntersperse()
+}
+
 // Parse parses flag definitions from the argument list, which should not
 // include the command name. Must be called after all flags in the FlagSet
 // are defined and before flags are accessed by the program.
 // The return value will be ErrHelp if -help or -h were set but not defined.
-// If allowIntersperse is set, arguments and flags can be interspersed, that
-// is flags can follow positional arguments.
-func (f *FlagSet) Parse(allowIntersperse bool, arguments []string) error {
+func (f *FlagSet) Parse(arguments []string) error {
 	f.parsed = true
 	f.procArgs = arguments
 	f.procFlag = ""
 	f.args = nil
-	f.allowIntersperse = allowIntersperse
 	for {
 		name, long, finished, err := f.parseOne()
 		if !finished {
@@ -1126,11 +1150,11 @@ func (f *FlagSet) Parsed() bool {
 
 // Parse parses the command-line flags from os.Args[1:]. Must be called
 // after all flags are defined and before flags are accessed by the program.
-// If allowIntersperse is set, arguments and flags can be interspersed, that
-// is flags can follow positional arguments.
-func Parse(allowIntersperse bool) {
+// Note that by default, flags are recognized anywhere in the argument list.
+// This can be altered by calling NoIntersperse.
+func Parse() {
 	// Ignore errors; CommandLine is set for ExitOnError.
-	CommandLine.Parse(allowIntersperse, os.Args[1:])
+	CommandLine.Parse(os.Args[1:])
 }
 
 // Parsed returns true if the command-line flags have been parsed.

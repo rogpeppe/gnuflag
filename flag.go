@@ -31,7 +31,7 @@
 	with the same address. Given the above flagVal definition, you can
 	create another name for the same flag.
 		flag.Var(&flagVal, "name", "")
- 	The usage message for the shortest name is the one printed in the help message.
+	The usage message for the shortest name is the one printed in the help message.
 
 	After all flags are defined, call
 		flag.Parse()

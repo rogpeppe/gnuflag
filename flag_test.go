@@ -2,15 +2,17 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-package gnuflag_test
+package gnuflag
 
 import (
 	"bytes"
 	"fmt"
-	. "github.com/juju/gnuflag"
+	"io"
+	"io/ioutil"
 	"os"
 	"reflect"
 	"sort"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -313,34 +315,36 @@ var parseTests = []struct {
 	args: []string{
 		"--=bar",
 	},
-	error: `empty %v in argument "--=bar"`,
+	error: `empty flag in argument "--=bar"`,
 }, {
 	about: "single-letter equals",
 	args: []string{
 		"-=bar",
 	},
-	error: `%v provided but not defined: -=`,
+	error: `flag provided but not defined: -=`,
 }, {
 	about: "empty flag #2",
 	args: []string{
 		"--=",
 	},
-	error: `empty %v in argument "--="`,
+	error: `empty flag in argument "--="`,
 }, {
 	about: "no equals",
 	args: []string{
 		"-=",
 	},
-	error: `%v provided but not defined: -=`,
+	error: `flag provided but not defined: -=`,
 }, {
+	about: "invalid bool value",
 	args: []string{
 		"-a=true",
 	},
 	vals: map[string]interface{}{
 		"a": true,
 	},
-	error: `invalid value "=true" for %v -a: strconv.ParseBool: parsing "=true": invalid syntax`,
+	error: `invalid value "=true" for flag -a: parse error`,
 }, {
+	about:       "unexpected bool value",
 	intersperse: true,
 	args: []string{
 		"-a",
@@ -349,8 +353,9 @@ var parseTests = []struct {
 	vals: map[string]interface{}{
 		"a": true,
 	},
-	error: "%v provided but not defined: -b",
+	error: "flag provided but not defined: -b",
 }, {
+	about:       "no argument provided",
 	intersperse: true,
 	args: []string{
 		"-a",
@@ -358,8 +363,9 @@ var parseTests = []struct {
 	vals: map[string]interface{}{
 		"a": "default",
 	},
-	error: "%v needs an argument: -a",
+	error: "flag needs an argument: -a",
 }, {
+	about:       "invalid int arg",
 	intersperse: true,
 	args: []string{
 		"-a", "b",
@@ -367,64 +373,61 @@ var parseTests = []struct {
 	vals: map[string]interface{}{
 		"a": 0,
 	},
-	error: `invalid value "b" for %v -a: strconv.ParseInt: parsing "b": invalid syntax`,
-},
-}
+	error: `invalid value "b" for flag -a: parse error`,
+}}
 
 func testParse(newFlagSet func() *FlagSet, t *testing.T) {
 	for i, g := range parseTests {
-		t.Logf("test %d. %s", i, g.about)
-		f := newFlagSet()
-		flags := make(map[string]interface{})
-		for name, val := range g.vals {
-			switch val.(type) {
-			case bool:
-				flags[name] = f.Bool(name, false, "bool value "+name)
-			case string:
-				flags[name] = f.String(name, "default", "string value "+name)
-			case int:
-				flags[name] = f.Int(name, 99, "int value "+name)
-			case uint:
-				flags[name] = f.Uint(name, 0, "uint value")
-			case uint64:
-				flags[name] = f.Uint64(name, 0, "uint64 value")
-			case int64:
-				flags[name] = f.Int64(name, 0, "uint64 value")
-			case float64:
-				flags[name] = f.Float64(name, 0, "float64 value")
-			case time.Duration:
-				flags[name] = f.Duration(name, 5*time.Second, "duration value")
-			default:
-				t.Fatalf("unhandled type %T", val)
+		t.Run(g.about, func(t *testing.T) {
+			f := newFlagSet()
+			flags := make(map[string]interface{})
+			for name, val := range g.vals {
+				switch val.(type) {
+				case bool:
+					flags[name] = f.Bool(name, false, "bool value "+name)
+				case string:
+					flags[name] = f.String(name, "default", "string value "+name)
+				case int:
+					flags[name] = f.Int(name, 99, "int value "+name)
+				case uint:
+					flags[name] = f.Uint(name, 0, "uint value")
+				case uint64:
+					flags[name] = f.Uint64(name, 0, "uint64 value")
+				case int64:
+					flags[name] = f.Int64(name, 0, "uint64 value")
+				case float64:
+					flags[name] = f.Float64(name, 0, "float64 value")
+				case time.Duration:
+					flags[name] = f.Duration(name, 5*time.Second, "duration value")
+				default:
+					t.Fatalf("unhandled type %T", val)
+				}
 			}
-		}
-		err := f.Parse(g.intersperse, g.args)
-		if g.error != "" {
-			expectedError := g.error
-			if strings.Contains(expectedError, "%v") {
-				expectedError = fmt.Sprintf(expectedError, f.FlagKnownAs)
+			err := f.Parse(g.intersperse, g.args)
+			if g.error != "" {
+				expectedError := g.error
+				if err == nil {
+					t.Errorf("expected error %q got nil", expectedError)
+				} else if err.Error() != expectedError {
+					t.Errorf("expected error %q got %q", expectedError, err.Error())
+				}
+				return
 			}
-			if err == nil {
-				t.Errorf("expected error %q got nil", expectedError)
-			} else if err.Error() != expectedError {
-				t.Errorf("expected error %q got %q", expectedError, err.Error())
+			for name, val := range g.vals {
+				actual := reflect.ValueOf(flags[name]).Elem().Interface()
+				if val != actual {
+					t.Errorf("flag %q, expected %v got %v", name, val, actual)
+				}
 			}
-			continue
-		}
-		for name, val := range g.vals {
-			actual := reflect.ValueOf(flags[name]).Elem().Interface()
-			if val != actual {
-				t.Errorf("flag %q, expected %v got %v", name, val, actual)
+			if len(f.Args()) != len(g.remaining) {
+				t.Fatalf("remaining args, expected %q got %q", g.remaining, f.Args())
 			}
-		}
-		if len(f.Args()) != len(g.remaining) {
-			t.Fatalf("remaining args, expected %q got %q", g.remaining, f.Args())
-		}
-		for j, a := range f.Args() {
-			if a != g.remaining[j] {
-				t.Errorf("arg %d, expected %q got %q", j, g.remaining[i], a)
+			for j, a := range f.Args() {
+				if a != g.remaining[j] {
+					t.Errorf("arg %d, expected %q got %q", j, g.remaining[i], a)
+				}
 			}
-		}
+		})
 	}
 }
 
@@ -440,19 +443,6 @@ func TestFlagSetParse(t *testing.T) {
 	// Flags are to be known as 'flag'
 	testParse(func() *FlagSet {
 		f := NewFlagSet("test", ContinueOnError)
-		f.SetOutput(nullWriter{})
-		return f
-	}, t)
-	// Flags are to be known as 'options', using alt constructor
-	testParse(func() *FlagSet {
-		f := NewFlagSetWithFlagKnownAs("test", ContinueOnError, "option")
-		f.SetOutput(nullWriter{})
-		return f
-	}, t)
-	// Flags are to be known as 'fluff', using a setter
-	testParse(func() *FlagSet {
-		f := NewFlagSet("test", ContinueOnError)
-		f.FlagKnownAs = "fluff"
 		f.SetOutput(nullWriter{})
 		return f
 	}, t)
@@ -575,12 +565,11 @@ func TestChangingArgs(t *testing.T) {
 func TestHelp(t *testing.T) {
 	var helpCalled = false
 	fs := NewFlagSet("help test", ContinueOnError)
-	fs.SetOutput(nullWriter{})
 	fs.Usage = func() { helpCalled = true }
 	var flag bool
 	fs.BoolVar(&flag, "flag", false, "regular flag")
 	// Regular flag invocation should work
-	err := fs.Parse(true, []string{"--flag"})
+	err := fs.Parse(false, []string{"--flag=true"})
 	if err != nil {
 		t.Fatal("expected no error; got ", err)
 	}
@@ -592,9 +581,7 @@ func TestHelp(t *testing.T) {
 		helpCalled = false // reset for next test
 	}
 	// Help flag should work as expected.
-	itemName := "flag/option/item/anything"
-	fs.FlagKnownAs = itemName
-	err = fs.Parse(true, []string{"--help"})
+	err = fs.Parse(false, []string{"--help"})
 	if err == nil {
 		t.Fatal("error expected")
 	}
@@ -604,16 +591,11 @@ func TestHelp(t *testing.T) {
 	if !helpCalled {
 		t.Fatal("help was not called")
 	}
-	// check message
-	expectedErrMsg := fmt.Sprintf("%v: help requested", itemName)
-	if err.Error() != expectedErrMsg {
-		t.Fatal(fmt.Sprintf("expected error `%v`; got ", expectedErrMsg), err)
-	}
 	// If we define a help flag, that should override.
 	var help bool
 	fs.BoolVar(&help, "help", false, "help flag")
 	helpCalled = false
-	err = fs.Parse(true, []string{"--help"})
+	err = fs.Parse(false, []string{"--help"})
 	if err != nil {
 		t.Fatal("expected no error for defined --help; got ", err)
 	}
@@ -628,41 +610,177 @@ func (nullWriter) Write(buf []byte) (int, error) {
 	return len(buf), nil
 }
 
-func TestPrintDefaults(t *testing.T) {
-	f := NewFlagSet("print test", ContinueOnError)
-	f.SetOutput(nullWriter{})
-	var b bool
-	var c int
-	var d string
-	var e float64
-	f.IntVar(&c, "trapclap", 99, "usage not shown")
-	f.IntVar(&c, "c", 99, "c usage")
-
-	f.BoolVar(&b, "bal", false, "usage not shown")
-	f.BoolVar(&b, "x", false, "usage not shown")
-	f.BoolVar(&b, "b", false, "b usage")
-	f.BoolVar(&b, "balalaika", false, "usage not shown")
-
-	f.StringVar(&d, "d", "d default", "d usage")
-
-	f.Float64Var(&e, "elephant", 3.14, "elephant usage")
-
-	var buf bytes.Buffer
-	f.SetOutput(&buf)
-	f.PrintDefaults()
-	f.SetOutput(nullWriter{})
-
-	expect :=
-		`-b, -x, --bal, --balalaika  (= false)
-    b usage
--c, --trapclap  (= 99)
-    c usage
--d (= "d default")
-    d usage
---elephant  (= 3.14)
-    elephant usage
+const defaultOutput = `  -A	for bootstrapping, allow 'any' type
+  --Alongflagname
+    	disable bounds checking
+  -C	a boolean defaulting to true (default true)
+  -D path
+    	set relative path for local imports
+  -E string
+    	issue 23543 (default "0")
+  -F number
+    	a non-zero number (default 2.7)
+  -G float
+    	a float that defaults to zero
+  -M string
+    	a multiline
+    	help
+    	string
+  -N int
+    	a non-zero int (default 27)
+  -O	a flag
+    	multiline help string (default true)
+  -Z int
+    	an int that defaults to zero
+  -a, --alternative
+    	short bool with alternative
+  -i int, --int int
+    	short int with alternative (default 23)
+  --maxT timeout
+    	set timeout for dial
 `
-	if buf.String() != expect {
-		t.Errorf("expect %q got %q", expect, buf.String())
+
+func TestPrintDefaults(t *testing.T) {
+	fs := NewFlagSet("print defaults test", ContinueOnError)
+	var buf bytes.Buffer
+	fs.SetOutput(&buf)
+	var b bool
+	fs.BoolVar(&b, "a", false, "short bool with alternative")
+	fs.BoolVar(&b, "alternative", false, "")
+	var i int
+	fs.IntVar(&i, "i", 23, "short int with alternative")
+	fs.IntVar(&i, "int", 0, "short int with alternative")
+
+	fs.Bool("A", false, "for bootstrapping, allow 'any' type")
+	fs.Bool("Alongflagname", false, "disable bounds checking")
+	fs.Bool("C", true, "a boolean defaulting to true")
+	fs.String("D", "", "set relative `path` for local imports")
+	fs.String("E", "0", "issue 23543")
+	fs.Float64("F", 2.7, "a non-zero `number`")
+	fs.Float64("G", 0, "a float that defaults to zero")
+	fs.String("M", "", "a multiline\nhelp\nstring")
+	fs.Int("N", 27, "a non-zero int")
+	fs.Bool("O", true, "a flag\nmultiline help string")
+	fs.Int("Z", 0, "an int that defaults to zero")
+	fs.Duration("maxT", 0, "set `timeout` for dial")
+	fs.PrintDefaults()
+	got := buf.String()
+	if got != defaultOutput {
+		t.Errorf("got %q want %q\n", got, defaultOutput)
+	}
+}
+
+// Issue 19230: validate range of Int and Uint flag values.
+func TestIntFlagOverflow(t *testing.T) {
+	if strconv.IntSize != 32 {
+		return
+	}
+	ResetForTesting(nil)
+	Int("i", 0, "")
+	Uint("u", 0, "")
+	if err := Set("i", "2147483648"); err == nil {
+		t.Error("unexpected success setting Int")
+	}
+	if err := Set("u", "4294967296"); err == nil {
+		t.Error("unexpected success setting Uint")
+	}
+}
+
+// Issue 20998: Usage should respect CommandLine.output.
+func TestUsageOutput(t *testing.T) {
+	ResetForTesting(DefaultUsage)
+	var buf bytes.Buffer
+	CommandLine.SetOutput(&buf)
+	defer func(old []string) { os.Args = old }(os.Args)
+	os.Args = []string{"app", "-i=1", "-unknown"}
+	Parse(false)
+	const want = "flag provided but not defined: -i\nUsage of app:\n"
+	if got := buf.String(); got != want {
+		t.Errorf("output = %q; want %q", got, want)
+	}
+}
+
+func TestGetters(t *testing.T) {
+	expectedName := "flag set"
+	expectedErrorHandling := ContinueOnError
+	expectedOutput := io.Writer(os.Stderr)
+	fs := NewFlagSet(expectedName, expectedErrorHandling)
+
+	if fs.Name() != expectedName {
+		t.Errorf("unexpected name: got %s, expected %s", fs.Name(), expectedName)
+	}
+	if fs.ErrorHandling() != expectedErrorHandling {
+		t.Errorf("unexpected ErrorHandling: got %d, expected %d", fs.ErrorHandling(), expectedErrorHandling)
+	}
+	if fs.Output() != expectedOutput {
+		t.Errorf("unexpected output: got %#v, expected %#v", fs.Output(), expectedOutput)
+	}
+
+	expectedName = "gopher"
+	expectedErrorHandling = ExitOnError
+	expectedOutput = os.Stdout
+	fs.Init(expectedName, expectedErrorHandling)
+	fs.SetOutput(expectedOutput)
+
+	if fs.Name() != expectedName {
+		t.Errorf("unexpected name: got %s, expected %s", fs.Name(), expectedName)
+	}
+	if fs.ErrorHandling() != expectedErrorHandling {
+		t.Errorf("unexpected ErrorHandling: got %d, expected %d", fs.ErrorHandling(), expectedErrorHandling)
+	}
+	if fs.Output() != expectedOutput {
+		t.Errorf("unexpected output: got %v, expected %v", fs.Output(), expectedOutput)
+	}
+}
+
+func TestParseError(t *testing.T) {
+	for _, typ := range []string{"bool", "int", "int64", "uint", "uint64", "float64", "duration"} {
+		fs := NewFlagSet("parse error test", ContinueOnError)
+		fs.SetOutput(ioutil.Discard)
+		_ = fs.Bool("bool", false, "")
+		_ = fs.Int("int", 0, "")
+		_ = fs.Int64("int64", 0, "")
+		_ = fs.Uint("uint", 0, "")
+		_ = fs.Uint64("uint64", 0, "")
+		_ = fs.Float64("float64", 0, "")
+		_ = fs.Duration("duration", 0, "")
+		// Strings cannot give errors.
+		args := []string{"--" + typ + "=x"}
+		err := fs.Parse(false, args) // x is not a valid setting for any flag.
+		if err == nil {
+			t.Errorf("Parse(%q)=%v; expected parse error", args, err)
+			continue
+		}
+		if !strings.Contains(err.Error(), "invalid") || !strings.Contains(err.Error(), "parse error") {
+			t.Errorf("Parse(%q)=%v; expected parse error", args, err)
+		}
+	}
+}
+
+func TestRangeError(t *testing.T) {
+	bad := []string{
+		"--int=123456789012345678901",
+		"--int64=123456789012345678901",
+		"--uint=123456789012345678901",
+		"--uint64=123456789012345678901",
+		"--float64=1e1000",
+	}
+	for _, arg := range bad {
+		fs := NewFlagSet("parse error test", ContinueOnError)
+		fs.SetOutput(ioutil.Discard)
+		_ = fs.Int("int", 0, "")
+		_ = fs.Int64("int64", 0, "")
+		_ = fs.Uint("uint", 0, "")
+		_ = fs.Uint64("uint64", 0, "")
+		_ = fs.Float64("float64", 0, "")
+		// Strings cannot give errors, and bools and durations do not return strconv.NumError.
+		err := fs.Parse(false, []string{arg})
+		if err == nil {
+			t.Errorf("Parse(%q)=%v; expected range error", arg, err)
+			continue
+		}
+		if !strings.Contains(err.Error(), "invalid") || !strings.Contains(err.Error(), "value out of range") {
+			t.Errorf("Parse(%q)=%v; expected range error", arg, err)
+		}
 	}
 }

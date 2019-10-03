@@ -82,7 +82,7 @@
 	analogous to the top-level functions for the command-line
 	flag set.
 */
-package gnuflag
+package flag
 
 import (
 	"errors"

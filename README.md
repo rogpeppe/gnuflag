@@ -1,10 +1,10 @@
 Gnuflag
 -----
 
-The gnuflag package is a fork of the Go standard library
-package that supports GNU-compatible flag syntax.
+The gnuflag repository holds a fork of the Go standard library [flag package](https://golang.org/pkg/flag) that supports GNU-compatible flag syntax.
 
-In particular, it supports `--longflag` and `-l` single-character
-flag syntax.
+In particular, it supports `--longflag` and `-l` single-character flag syntax.
 
-Full documentation can be found here: https://godoc.org/github.com/rogpeppe/gnuflag.
+The API is compatible with the standard flag package API.
+
+Full documentation can be found here: https://godoc.org/github.com/rogpeppe/gnuflag/flag.
